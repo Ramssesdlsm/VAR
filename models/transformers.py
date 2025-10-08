@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from typing import Tuple
 
 @torch.jit.script
 class FeedForwardNetwork(nn.Module):
@@ -61,3 +62,28 @@ class MultiHeadAttention(nn.Module):
         out = self.out_dropout(self.to_out(out))
 
         return out
+
+class AdaptativeLayerNorm(nn.Module):
+    def __init__(self, dim: int, cond_dim: int):
+        super(AdaptativeLayerNorm, self).__init__()
+
+        self.norm = nn.LayerNorm(dim, elementwise_affine=False)
+
+        self.modulation = nn.Sequential(
+            nn.SiLU(),
+            nn.Linear(cond_dim, 6 * dim, bias=True)
+        )
+    
+    def forward(self, x: torch.Tensor, cond: torch.Tensor) -> Tuple:
+        x_norm = self.norm(x)
+
+        params = self.modulation(cond)
+
+        params = params.unsqueeze(1)
+
+        gate_attn, gate_ffn, shift_attn, scale_attn, shift_ffn, scale_ffn = params.chunk(6, dim=-1)
+
+        x_modulated_attn = x_norm * (1 + scale_attn) + shift_attn
+        x_modulated_ffn = x_norm * (1 + scale_ffn) + shift_ffn
+
+        return x_modulated_attn, gate_attn, x_modulated_ffn, gate_ffn
