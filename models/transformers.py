@@ -10,7 +10,7 @@ class FeedForwardNetwork(nn.Module):
        self.net = nn.Sequential(
             nn.Linear(input_dim, hidden_dim),
             nn.GELU(approximate='tanh'),
-            nn.Linear(hidden_dim, input_dim),
+            nn.Linear(hidden_dim, output_dim),
             nn.Dropout(dropout)
        )
 
@@ -22,6 +22,7 @@ class MultiHeadAttention(nn.Module):
         super(MultiHeadAttention, self).__init__()
         assert dim % num_heads == 0, "The dimension must be divisible by the number of heads"
 
+        self.dim = dim
         self.num_head = num_heads
         self.head_dim = dim // num_heads
         self.scale = self.head_dim ** -0.5
@@ -63,9 +64,9 @@ class MultiHeadAttention(nn.Module):
 
         return out
 
-class AdaptativeLayerNorm(nn.Module):
+class AdaptiveLayerNorm(nn.Module):
     def __init__(self, dim: int, cond_dim: int):
-        super(AdaptativeLayerNorm, self).__init__()
+        super(AdaptiveLayerNorm, self).__init__()
 
         self.norm = nn.LayerNorm(dim, elementwise_affine=False)
 
@@ -73,8 +74,8 @@ class AdaptativeLayerNorm(nn.Module):
             nn.SiLU(),
             nn.Linear(cond_dim, 6 * dim, bias=True)
         )
-    
-    def forward(self, x: torch.Tensor, cond: torch.Tensor) -> Tuple:
+
+    def forward(self, x: torch.Tensor, cond: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         x_norm = self.norm(x)
 
         params = self.modulation(cond)
@@ -87,3 +88,40 @@ class AdaptativeLayerNorm(nn.Module):
         x_modulated_ffn = x_norm * (1 + scale_ffn) + shift_ffn
 
         return x_modulated_attn, gate_attn, x_modulated_ffn, gate_ffn
+    
+class VARBlock(nn.Module):
+    def __init__(self, dim: int, num_heads: int, cond_dim: int, mlp_ratio: float = 4.0, attn_dropout: float = 0.0, out_dropout: float = 0.0, ffn_dropout: float = 0.0):
+        super(VARBlock, self).__init__()
+
+        self.norm1 = AdaptiveLayerNorm(dim, cond_dim)
+
+        self.attention = MultiHeadAttention(
+            dim=dim,
+            num_heads=num_heads,
+            attn_dropout=attn_dropout,
+            out_dropout=out_dropout
+        )
+
+        self.norm2 = AdaptiveLayerNorm(dim, cond_dim)
+
+        self.ffn = FeedForwardNetwork(
+            input_dim=dim,
+            hidden_dim=round(dim * mlp_ratio),
+            output_dim=dim,
+            dropout=ffn_dropout
+        )
+    
+    def forward(self, x: torch.Tensor, cond: torch.Tensor, attn_mask: torch.Tensor = None) -> torch.Tensor:
+        x_modulated_attn, gate_attn, _, _ = self.norm1(x, cond)
+
+        attn_output = self.attention(x_modulated_attn, attn_mask)
+
+        x = x + gate_attn * attn_output
+
+        _, _, x_modulated_ffn, gate_ffn = self.norm2(x, cond)
+
+        ffn_output = self.ffn(x_modulated_ffn)
+
+        x = x + gate_ffn * ffn_output
+
+        return x
