@@ -35,16 +35,12 @@ class MultiHeadAttention(nn.Module):
 
         q, k, v = qkv[0], qkv[1], qkv[2]  
 
-        attn_scores = torch.matmul(q, k.transpose(-2, -1)) * self.scale
-
-        if mask is not None:
-            mask_value = -torch.finfo(attn_scores.dtype).max
-            attn_scores = attn_scores.masked_fill(~mask.bool(), mask_value)
-
-        attn_weights = attn_scores.softmax(dim=-1)
-        attn_weights = self.attn_dropout(attn_weights)
-
-        out = torch.matmul(attn_weights, v)
+        out = F.scaled_dot_product_attention(
+            q, k, v,
+            attn_mask=mask,
+            dropout_p=self.attn_dropout.p if self.training else 0.0,
+            is_causal=False
+        )
 
         out = out.transpose(1, 2).contiguous().view(batch_size, seq_len, self.dim)
 
