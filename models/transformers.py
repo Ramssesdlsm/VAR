@@ -3,7 +3,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import Tuple
 
-@torch.jit.script
 class FeedForwardNetwork(nn.Module):
     def __init__(self, input_dim: int, hidden_dim: int, output_dim: int, dropout: float = 0.0):
        super(FeedForwardNetwork, self).__init__()
