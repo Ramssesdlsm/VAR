@@ -2,6 +2,20 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+@torch.jit.script
+class FeedForwardNetwork(nn.Module):
+    def __init__(self, input_dim: int, hidden_dim: int, output_dim: int, dropout: float = 0.0):
+       super(FeedForwardNetwork, self).__init__()
+       self.net = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.GELU(approximate='tanh'),
+            nn.Linear(hidden_dim, input_dim),
+            nn.Dropout(dropout)
+       )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+       return self.net(x)
+
 class MultiHeadAttention(nn.Module):
     def __init__(self, dim: int, num_heads: int, attn_dropout: float = 0.0, out_dropout: float = 0.0):
         super(MultiHeadAttention, self).__init__()
