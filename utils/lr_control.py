@@ -101,8 +101,12 @@ def filter_params(model, nowd_keys=()) -> Tuple[
     for rk in range(dist.get_world_size()):
         dist.barrier()
         if dist.get_rank() == rk:
-            print(f'[get_param_groups][rank{dist.get_rank()}] {type(model).__name__=} {count=}, {numel=}', flush=True, force=True)
+            print(f'[get_param_groups][rank{dist.get_rank()}] {type(model).__name__=} {count=}, {numel=}', flush=True)
     print('')
     
-    assert len(names_no_grad) == 0, f'[get_param_groups] names_no_grad = \n{pformat(names_no_grad, indent=2, width=240)}\n'
+    # Comentado: es normal tener parámetros congelados (ej. VQ-VAE)
+    # assert len(names_no_grad) == 0, f'[get_param_groups] names_no_grad = \n{pformat(names_no_grad, indent=2, width=240)}\n'
+    if len(names_no_grad) > 0:
+        print(f'[get_param_groups] Parámetros congelados (no_grad): {len(names_no_grad)}', flush=True)
+    
     return names, paras, list(para_groups.values())
