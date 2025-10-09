@@ -30,7 +30,9 @@ class VARTrainer(object):
         self.var_wo_ddp: VAR = var_wo_ddp  # after torch.compile
         self.var_opt = var_opt
         
-        del self.var_wo_ddp.rng
+        # Inicializar rng solo si no existe
+        if hasattr(self.var_wo_ddp, 'rng'):
+            del self.var_wo_ddp.rng
         self.var_wo_ddp.rng = torch.Generator(device=device)
         
         self.label_smooth = label_smooth
@@ -102,13 +104,17 @@ class VARTrainer(object):
         B, V = label_B.shape[0], self.vae_local.vocab_size
         self.var.require_backward_grad_sync = stepping
         
-        gt_idx_Bl: List[ITen] = self.vae_local.img_to_idxBl(inp_B3HW)
-        gt_BL = torch.cat(gt_idx_Bl, dim=1)
-        x_BLCv_wo_first_l: Ten = self.quantize_local.idxBl_to_var_input(gt_idx_Bl)
+        # El VAR ya maneja internamente la codificación de imágenes con el VAE
+        # Calcular ground truth para la loss (sigue siendo necesario)
+        with torch.no_grad(), torch.autocast('cuda', enabled=False):
+            inp_B3HW_fp32 = inp_B3HW.float()
+            gt_idx_Bl: List[ITen] = self.vae_local.img_to_idxBl(inp_B3HW_fp32)
+            gt_BL = torch.cat(gt_idx_Bl, dim=1)
         
         with self.var_opt.amp_ctx:
             self.var_wo_ddp.forward
-            logits_BLV = self.var(label_B, x_BLCv_wo_first_l)
+            # VAR.forward(images, labels) - no x_BLCv_wo_first_l
+            logits_BLV = self.var(inp_B3HW, label_B)
             loss = self.train_loss(logits_BLV.view(-1, V), gt_BL.view(-1)).view(B, -1)
             if prog_si >= 0:    # in progressive training
                 bg, ed = self.begin_ends[prog_si]
@@ -132,8 +138,8 @@ class VARTrainer(object):
             else:               # not in progressive training
                 Ltail = self.val_loss(logits_BLV.data[:, -self.last_l:].reshape(-1, V), gt_BL[:, -self.last_l:].reshape(-1)).item()
                 acc_tail = (pred_BL[:, -self.last_l:] == gt_BL[:, -self.last_l:]).float().mean().item() * 100
-            grad_norm = grad_norm.item()
-            metric_lg.update(Lm=Lmean, Lt=Ltail, Accm=acc_mean, Acct=acc_tail, tnm=grad_norm)
+            grad_norm_val = grad_norm.item() if grad_norm is not None else 0.0
+            metric_lg.update(Lm=Lmean, Lt=Ltail, Accm=acc_mean, Acct=acc_tail, tnm=grad_norm_val)
         
         # log to tensorboard
         if g_it == 0 or (g_it + 1) % 500 == 0:
