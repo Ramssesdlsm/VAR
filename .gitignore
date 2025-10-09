@@ -18,3 +18,11 @@ local_output*
 *.log
 *.txt
 *.ipynb
+*.err
+*.out
+*.md
+*.slurm
+*.sh
+# Ignore data folder at all levels
+**/data/
+**/output/
