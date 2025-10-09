@@ -48,6 +48,9 @@ class VQVAE(nn.Module):
         self.quant_conv = torch.nn.Conv2d(self.Cvae, self.Cvae, quant_conv_ks, stride=1, padding=quant_conv_ks//2)
         self.post_quant_conv = torch.nn.Conv2d(self.Cvae, self.Cvae, quant_conv_ks, stride=1, padding=quant_conv_ks//2)
         
+        # Agregar propiedad de acceso rápido a patch_nums
+        self.patch_nums = self.quantize.v_patch_nums
+        
         if self.test_mode:
             self.eval()
             [p.requires_grad_(False) for p in self.parameters()]
@@ -88,6 +91,26 @@ class VQVAE(nn.Module):
             return self.decoder(self.post_quant_conv(ls_f_hat_BChw[-1])).clamp_(-1, 1)
         else:
             return [self.decoder(self.post_quant_conv(f_hat)).clamp_(-1, 1) for f_hat in ls_f_hat_BChw]
+    
+    def encode(self, x: torch.Tensor) -> List[torch.Tensor]:
+        """
+        Encode images to multi-scale token maps.
+        Args:
+            x: Input images [B, 3, H, W]
+        Returns:
+            List of token maps, one per scale [B, pn, pn] where pn is patch_num for that scale
+        """
+        return self.img_to_idxBl(x)
+    
+    def decode(self, token_maps: List[torch.Tensor]) -> torch.Tensor:
+        """
+        Decode multi-scale token maps to images.
+        Args:
+            token_maps: List of token maps [B, pn, pn] for each scale
+        Returns:
+            Reconstructed images [B, 3, H, W]
+        """
+        return self.idxBl_to_img(token_maps, same_shape=True, last_one=True)
     
     def load_state_dict(self, state_dict: Dict[str, Any], strict=True, assign=False):
         if 'quantize.ema_vocab_hit_SV' in state_dict and state_dict['quantize.ema_vocab_hit_SV'].shape[0] != self.quantize.ema_vocab_hit_SV.shape[0]:
