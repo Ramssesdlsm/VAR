@@ -150,20 +150,24 @@ class VARBlock(nn.Module):
         return x
     
 class VARTransformer(nn.Module):
-    def __init__(self, depth: int, dim: int, num_heads: int, mlp_ratio: float, attn_dropout: float, out_dropout: float, ffn_dropout: float, num_classes: int, vocab_size: int, max_seq_len: int, num_levels: int, first_scale_tokens: int):
+    def __init__(self, depth: int, dim: int, num_heads: int, mlp_ratio: float, attn_dropout: float, out_dropout: float, ffn_dropout: float, num_classes: int, vocab_size: int, max_seq_len: int, num_levels: int, first_scale_tokens: int, Cvae: int = 32):
         super(VARTransformer, self).__init__()
 
         self.num_classes = num_classes
         self.vocab_size = vocab_size
         self.max_seq_len = max_seq_len
         self.first_scale_tokens = first_scale_tokens
+        self.Cvae = Cvae
 
         # Embeddings
         self.class_embedding = nn.Embedding(num_classes + 1, dim)
-        self.token_embedding = nn.Embedding(vocab_size, dim)
+        self.token_embedding = nn.Embedding(vocab_size, dim)  # No se usa con embeddings procesados
         self.position_embedding = nn.Parameter(torch.zeros(1, max_seq_len, dim))
         self.level_embedding = nn.Embedding(num_levels, dim)
         self.pos_start = nn.Parameter(torch.zeros(1, first_scale_tokens, dim))
+        
+        # word_embed: transforma embeddings de VQ-VAE (Cvae) al espacio del transformer (dim)
+        self.word_embed = nn.Linear(Cvae, dim, bias=True)
 
         # Backbone
         self.blocks = nn.ModuleList([
@@ -195,38 +199,44 @@ class VARTransformer(nn.Module):
                 nn.init.normal_(m.weight, std=0.02)
         self.apply(_init_weights)
     
-    def forward(self, teacher_forcing_tokens: torch.Tensor, class_labels: torch.Tensor, level_indices: torch.Tensor, attn_mask: torch.Tensor = None) -> torch.Tensor:
+    def forward(self, x_BLCv_wo_first_l: torch.Tensor, class_labels: torch.Tensor, level_indices: torch.Tensor, attn_mask: torch.Tensor = None) -> torch.Tensor:
         """
-        Forward pass para VAR con teacher forcing.
+        Forward pass para VAR con teacher forcing (según implementación original).
         
         Args:
-            teacher_forcing_tokens: tokens de scales 1-N (sin scale 0), shape [B, L-first_scale_tokens]
+            x_BLCv_wo_first_l: embeddings procesados de scales 1-N (sin scale0)
+                              shape [B, L-first_l, Cvae]
+                              Estos vienen de idxBl_to_var_input, NO son tokens crudos
             class_labels: etiquetas de clase, shape [B]
-            level_indices: índices de nivel para cada token, shape [B, L]
+            level_indices: índices de nivel para TODAS las escalas, shape [B, L]
             attn_mask: máscara de atención causal, shape [L, L]
         
         Returns:
-            logits: predicciones para TODAS las escalas 0-N, shape [B, L, vocab_size]
+            logits: predicciones para TODAS las escalas, shape [B, L, vocab_size]
         """
-        seq_len = teacher_forcing_tokens.shape[1] + self.first_scale_tokens
-        assert seq_len <= self.max_seq_len, f"Sequence length {seq_len} exceeds model capacity {self.max_seq_len}"
+        B = x_BLCv_wo_first_l.shape[0]
+        total_seq_len = level_indices.shape[1]
+        
+        assert total_seq_len <= self.max_seq_len, f"Sequence length {total_seq_len} exceeds model capacity {self.max_seq_len}"
 
         class_cond = self.class_embedding(class_labels)
 
-        # Scale 0: usa class embedding como "token" 
-        sos_tokens = class_cond.unsqueeze(1).expand(-1, self.first_scale_tokens, -1)
+        # Scale 0: usa class embedding como "token" (sos)
+        sos = class_cond.unsqueeze(1).expand(-1, self.first_scale_tokens, -1)
         sos_level_indices = torch.zeros(self.first_scale_tokens, dtype=torch.long, device=class_cond.device)
-        # Usar position_embedding consistente para todas las posiciones
-        sos_sequence = sos_tokens + self.position_embedding[:, :self.first_scale_tokens, :] + self.level_embedding(sos_level_indices)
+        sos = sos + self.position_embedding[:, :self.first_scale_tokens, :] + self.level_embedding(sos_level_indices)
 
-        # Scales 1-N: usa embeddings de los tokens reales
-        token_embeddings = self.token_embedding(teacher_forcing_tokens)
-        position_embeddings = self.position_embedding[:, self.first_scale_tokens:seq_len, :]
+        # Transformar embeddings procesados de VQ-VAE (Cvae) al espacio del transformer (dim)
+        # x_BLCv_wo_first_l viene de idxBl_to_var_input y contiene información rica
+        teacher_embeddings = self.word_embed(x_BLCv_wo_first_l.float())
+        
+        # Agregar position y level embeddings
+        position_embeddings = self.position_embedding[:, self.first_scale_tokens:total_seq_len, :]
         level_embeddings = self.level_embedding(level_indices[:, self.first_scale_tokens:])
-        teacher_sequence = token_embeddings + position_embeddings + level_embeddings
+        teacher_sequence = teacher_embeddings + position_embeddings + level_embeddings
 
-        # Concatenar: [scale0_representations, scale1-N_representations]
-        x = torch.cat((sos_sequence, teacher_sequence), dim=1)
+        # Concatenar: [sos, teacher_embeddings]
+        x = torch.cat((sos, teacher_sequence), dim=1)
 
         # Aplicar transformer blocks con máscara causal
         for block in self.blocks:

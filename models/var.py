@@ -7,42 +7,44 @@ import torch.nn.functional as F
 from models.vqvae import VQVAE
 from models.transformers import VARTransformer
 
-def prepare_var_inputs(token_maps, labels, patch_nums):
+def prepare_var_inputs(token_maps, labels, patch_nums, vqvae_quantizer):
     """
-    Prepara los inputs para VAR con teacher forcing.
+    Prepara los inputs para VAR con teacher forcing (según implementación original).
     
-    Teacher forcing correcto:
-    - Input tokens: [scale1, scale2, ..., scaleN] (sin scale0)
-    - Con sos prepended: [sos, scale1, scale2, ..., scaleN]
-    - Target (ground truth): [scale0, scale1, scale2, ..., scaleN]
+    Del paper VAR:
+    - Input: ([s], r1, r2,...,rK-1) para predecir (r1, r2, r3,...,rK)
+    - "tokens in each rk are fully correlated" → máscara d >= dT
+    - "each rk can only attend to r≤k"
     
-    Con causal masking:
-    - Posición 0: ve solo 'sos', predice scale0
-    - Posición 1: ve 'sos + scale1_input', predice scale1
-    - Posición i: ve 'sos + scale1...scalei_input', predice scalei
+    Diferencia clave con aproximación naive:
+    - NO usa tokens crudos (índices) directamente
+    - USA embeddings procesados a través de idxBl_to_var_input
+    - Estos embeddings contienen información acumulada de escalas anteriores
+    - Se interpolan a diferentes resoluciones
+    - Se procesan con convoluciones residuales
     
-    Esto asegura que el modelo nunca vea el token que está prediciendo.
+    Retorna:
+    - x_BLCv_wo_first_l: embeddings procesados de escalas 1 a N (sin scale0)
+    - level_indices: índices de nivel para todas las escalas
+    - attn_mask: máscara causal d >= dT
     """
     b = labels.shape[0]
-    flat_tokens = [t.view(b, -1) for t in token_maps]
-    full_seq = torch.cat(flat_tokens, dim=1)
     
-    first_scale_tokens = patch_nums[0] ** 2
-    # Teacher forcing: excluir la primera escala (scale0)
-    # El modelo verá scales 1-N como input y predecirá scales 0-N
-    teacher_forcing_tokens = full_seq[:, first_scale_tokens:]
+    # Obtener embeddings procesados usando el método original
+    # Esta función hace: embed + interpolate + quant_resi + acumular info
+    x_BLCv_wo_first_l = vqvae_quantizer.idxBl_to_var_input(token_maps)
     
+    # Level indices para todas las escalas
     level_indices_list = [torch.full((pn**2,), i, dtype=torch.long) for i, pn in enumerate(patch_nums)]
     level_indices = torch.cat(level_indices_list).to(labels.device)
     
     d = level_indices
-    # Máscara causal: cada token solo puede atender a tokens de niveles ANTERIORES
-    # d.unsqueeze(1) > d.unsqueeze(0): nivel actual > nivel del token a atender
-    # Esto asegura que tokens del mismo nivel NO se vean entre sí
-    attn_mask = d.unsqueeze(1) > d.unsqueeze(0)
+    # Máscara según paper: d >= dT (mayor o igual)
+    # Permite que tokens en la misma escala se vean entre sí ("fully correlated")
+    attn_mask = d.unsqueeze(1) >= d.unsqueeze(0)
     
     return {
-        "teacher_forcing_tokens": teacher_forcing_tokens,
+        "x_BLCv_wo_first_l": x_BLCv_wo_first_l,  # Embeddings procesados
         "class_labels": labels,
         "level_indices": level_indices.unsqueeze(0).expand(b, -1),
         "attn_mask": attn_mask,
@@ -84,10 +86,11 @@ class VAR(nn.Module):
         with torch.no_grad(), torch.autocast('cuda', enabled=False):
             # Forzar float32 para el VAE congelado
             images_fp32 = images.float()
-            token_maps = self.vqvae.encode(images_fp32)
+            token_maps = self.vqvae.img_to_idxBl(images_fp32)  # Retorna lista de tensores
         
         # 2. Preparar los tensores de entrada para el transformador
-        model_inputs = prepare_var_inputs(token_maps, labels, self.patch_nums)
+        # Esto incluye procesar los tokens a través de idxBl_to_var_input
+        model_inputs = prepare_var_inputs(token_maps, labels, self.patch_nums, self.vqvae.quantize)
         
         # 3. Pasar los tensores al transformador para obtener los logits
         logits = self.transformer(**model_inputs)

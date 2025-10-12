@@ -153,8 +153,8 @@ def build_vae(args) -> VQVAE:
         test_mode=True  # Congelar parámetros
     )
     
-    # Cargar pesos
-    checkpoint = torch.load(args.vae_ckpt, map_location='cpu')
+    # Cargar pesos (weights_only=False es seguro aquí porque controlamos el checkpoint)
+    checkpoint = torch.load(args.vae_ckpt, map_location='cpu', weights_only=False)
     if 'state_dict' in checkpoint:
         state_dict = checkpoint['state_dict']
     elif 'model' in checkpoint:
@@ -190,6 +190,7 @@ def build_var_model(vae: VQVAE, args) -> VAR:
         'max_seq_len': max_seq_len,
         'num_levels': len(vae.patch_nums),
         'first_scale_tokens': vae.patch_nums[0] ** 2,
+        'Cvae': vae.Cvae,  # Dimensión de embeddings del VQ-VAE
     }
     
     # Crear modelo VAR
