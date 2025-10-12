@@ -141,7 +141,7 @@ class VectorQuantizer2(nn.Module):
         f_hat_or_idx_Bl: List[torch.Tensor] = []
         
         patch_hws = [(pn, pn) if isinstance(pn, int) else (pn[0], pn[1]) for pn in (v_patch_nums or self.v_patch_nums)]    # from small to large
-        assert patch_hws[-1][0] == H and patch_hws[-1][1] == W, f'{patch_hws[-1]=} != ({H=}, {W=})'
+        assert patch_hws[-1][0] == H and patch_hws[-1][1] == W, f'patch_hws[-1]={patch_hws[-1]} != (H={H}, W={W})'
         
         SN = len(patch_hws)
         for si, (ph, pw) in enumerate(patch_hws): # from small to large

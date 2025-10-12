@@ -188,7 +188,6 @@ class VARTransformer(nn.Module):
 
     def initialize_weights(self):
         nn.init.normal_(self.position_embedding, std=0.02)
-        nn.init.normal_(self.pos_start, std=0.02)
         def _init_weights(m):
             if isinstance(m, nn.Linear):
                 nn.init.xavier_uniform_(m.weight)
