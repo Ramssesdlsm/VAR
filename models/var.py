@@ -8,18 +8,38 @@ from models.vqvae import VQVAE
 from models.transformers import VARTransformer
 
 def prepare_var_inputs(token_maps, labels, patch_nums):
+    """
+    Prepara los inputs para VAR con teacher forcing.
+    
+    Teacher forcing correcto:
+    - Input tokens: [scale1, scale2, ..., scaleN] (sin scale0)
+    - Con sos prepended: [sos, scale1, scale2, ..., scaleN]
+    - Target (ground truth): [scale0, scale1, scale2, ..., scaleN]
+    
+    Con causal masking:
+    - Posición 0: ve solo 'sos', predice scale0
+    - Posición 1: ve 'sos + scale1_input', predice scale1
+    - Posición i: ve 'sos + scale1...scalei_input', predice scalei
+    
+    Esto asegura que el modelo nunca vea el token que está prediciendo.
+    """
     b = labels.shape[0]
     flat_tokens = [t.view(b, -1) for t in token_maps]
     full_seq = torch.cat(flat_tokens, dim=1)
     
     first_scale_tokens = patch_nums[0] ** 2
+    # Teacher forcing: excluir la primera escala (scale0)
+    # El modelo verá scales 1-N como input y predecirá scales 0-N
     teacher_forcing_tokens = full_seq[:, first_scale_tokens:]
     
     level_indices_list = [torch.full((pn**2,), i, dtype=torch.long) for i, pn in enumerate(patch_nums)]
     level_indices = torch.cat(level_indices_list).to(labels.device)
     
     d = level_indices
-    attn_mask = d.unsqueeze(1) >= d.unsqueeze(0)
+    # Máscara causal: cada token solo puede atender a tokens de niveles ANTERIORES
+    # d.unsqueeze(1) > d.unsqueeze(0): nivel actual > nivel del token a atender
+    # Esto asegura que tokens del mismo nivel NO se vean entre sí
+    attn_mask = d.unsqueeze(1) > d.unsqueeze(0)
     
     return {
         "teacher_forcing_tokens": teacher_forcing_tokens,

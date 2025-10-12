@@ -196,27 +196,43 @@ class VARTransformer(nn.Module):
         self.apply(_init_weights)
     
     def forward(self, teacher_forcing_tokens: torch.Tensor, class_labels: torch.Tensor, level_indices: torch.Tensor, attn_mask: torch.Tensor = None) -> torch.Tensor:
+        """
+        Forward pass para VAR con teacher forcing.
+        
+        Args:
+            teacher_forcing_tokens: tokens de scales 1-N (sin scale 0), shape [B, L-first_scale_tokens]
+            class_labels: etiquetas de clase, shape [B]
+            level_indices: índices de nivel para cada token, shape [B, L]
+            attn_mask: máscara de atención causal, shape [L, L]
+        
+        Returns:
+            logits: predicciones para TODAS las escalas 0-N, shape [B, L, vocab_size]
+        """
         seq_len = teacher_forcing_tokens.shape[1] + self.first_scale_tokens
-        assert seq_len <= self.max_seq_len, "Sequence length exceeds model capacity"
+        assert seq_len <= self.max_seq_len, f"Sequence length {seq_len} exceeds model capacity {self.max_seq_len}"
 
         class_cond = self.class_embedding(class_labels)
 
+        # Scale 0: usa class embedding como "token" 
         sos_tokens = class_cond.unsqueeze(1).expand(-1, self.first_scale_tokens, -1)
         sos_level_indices = torch.zeros(self.first_scale_tokens, dtype=torch.long, device=class_cond.device)
-        sos_sequence = sos_tokens + self.pos_start + self.level_embedding(sos_level_indices)
+        # Usar position_embedding consistente para todas las posiciones
+        sos_sequence = sos_tokens + self.position_embedding[:, :self.first_scale_tokens, :] + self.level_embedding(sos_level_indices)
 
+        # Scales 1-N: usa embeddings de los tokens reales
         token_embeddings = self.token_embedding(teacher_forcing_tokens)
-
         position_embeddings = self.position_embedding[:, self.first_scale_tokens:seq_len, :]
         level_embeddings = self.level_embedding(level_indices[:, self.first_scale_tokens:])
-
         teacher_sequence = token_embeddings + position_embeddings + level_embeddings
 
+        # Concatenar: [scale0_representations, scale1-N_representations]
         x = torch.cat((sos_sequence, teacher_sequence), dim=1)
 
+        # Aplicar transformer blocks con máscara causal
         for block in self.blocks:
             x = block(x, cond=class_cond, attn_mask=attn_mask)
         
+        # Generar logits para todas las posiciones
         logits = self.head(x, cond=class_cond)
 
         return logits
