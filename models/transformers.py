@@ -161,12 +161,11 @@ class VARTransformer(nn.Module):
 
         # Embeddings
         self.class_embedding = nn.Embedding(num_classes + 1, dim)
-        self.token_embedding = nn.Embedding(vocab_size, dim)  # No se usa con embeddings procesados
         self.position_embedding = nn.Parameter(torch.zeros(1, max_seq_len, dim))
         self.level_embedding = nn.Embedding(num_levels, dim)
-        self.pos_start = nn.Parameter(torch.zeros(1, first_scale_tokens, dim))
         
-        # word_embed: transforma embeddings de VQ-VAE (Cvae) al espacio del transformer (dim)
+        # word_embed: transforma embeddings procesados de VQ-VAE (Cvae) al espacio del transformer (dim)
+        # Esto es equivalente a self.word_embed en el código original
         self.word_embed = nn.Linear(Cvae, dim, bias=True)
 
         # Backbone
