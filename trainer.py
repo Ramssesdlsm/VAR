@@ -65,14 +65,17 @@ class VARTrainer(object):
             inp_B3HW = inp_B3HW.to(dist.get_device(), non_blocking=True)
             label_B = label_B.to(dist.get_device(), non_blocking=True)
             
-            gt_idx_Bl: List[ITen] = self.vae_local.img_to_idxBl(inp_B3HW)
-            gt_BL = torch.cat(gt_idx_Bl, dim=1)
-            x_BLCv_wo_first_l: Ten = self.quantize_local.idxBl_to_var_input(gt_idx_Bl)
+            # Calcular ground truth para la loss (con VAE en float32, sin autocast)
+            with torch.no_grad(), torch.autocast('cuda', enabled=False):
+                inp_B3HW_fp32 = inp_B3HW.float()
+                gt_idx_Bl: List[ITen] = self.vae_local.img_to_idxBl(inp_B3HW_fp32)
+                gt_BL = torch.cat(gt_idx_Bl, dim=1)
             
-            self.var_wo_ddp.forward
-            logits_BLV = self.var_wo_ddp(label_B, x_BLCv_wo_first_l)
+            # VAR.forward(images, labels) - orden correcto
+            logits_BLV = self.var_wo_ddp(inp_B3HW, label_B)
             L_mean += self.val_loss(logits_BLV.data.view(-1, V), gt_BL.view(-1)) * B
             L_tail += self.val_loss(logits_BLV.data[:, -self.last_l:].reshape(-1, V), gt_BL[:, -self.last_l:].reshape(-1)) * B
+            # Cálculo original de accuracy (como en el código de FoundationVision)
             acc_mean += (logits_BLV.data.argmax(dim=-1) == gt_BL).sum() * (100/gt_BL.shape[1])
             acc_tail += (logits_BLV.data[:, -self.last_l:].argmax(dim=-1) == gt_BL[:, -self.last_l:]).sum() * (100 / self.last_l)
             tot += B
@@ -112,7 +115,6 @@ class VARTrainer(object):
             gt_BL = torch.cat(gt_idx_Bl, dim=1)
         
         with self.var_opt.amp_ctx:
-            self.var_wo_ddp.forward
             # VAR.forward(images, labels) - no x_BLCv_wo_first_l
             logits_BLV = self.var(inp_B3HW, label_B)
             loss = self.train_loss(logits_BLV.view(-1, V), gt_BL.view(-1)).view(B, -1)
@@ -133,6 +135,31 @@ class VARTrainer(object):
         if it == 0 or it in metric_lg.log_iters:
             Lmean = self.val_loss(logits_BLV.data.view(-1, V), gt_BL.view(-1)).item()
             acc_mean = (pred_BL == gt_BL).float().mean().item() * 100
+            
+            # DEBUG: Verificar si loss y accuracy son consistentes
+            if it == 0 and dist.is_master():
+                print(f"\n[DEBUG] Iteration {it}")
+                print(f"  logits_BLV.shape: {logits_BLV.shape}")
+                print(f"  gt_BL.shape: {gt_BL.shape}")
+                print(f"  pred_BL.shape: {pred_BL.shape}")
+                print(f"  Loss (mean): {Lmean:.4f}")
+                print(f"  Accuracy: {acc_mean:.2f}%")
+                print(f"  Expected acc from loss: {100 * torch.exp(-torch.tensor(Lmean)):.2f}%")
+                print(f"  Tokens correctos: {(pred_BL == gt_BL).sum().item()}/{pred_BL.numel()}")
+                
+                # Verificar las probabilidades de los tokens correctos
+                probs = torch.softmax(logits_BLV.data.view(-1, V), dim=-1)
+                correct_probs = probs[torch.arange(probs.shape[0]), gt_BL.view(-1)]
+                print(f"  Prob promedio del token correcto: {correct_probs.mean().item():.6f}")
+                print(f"  Prob max: {correct_probs.max().item():.6f}, min: {correct_probs.min().item():.6f}")
+                print(f"  -log(prob_promedio): {-torch.log(correct_probs.mean()).item():.4f} (debería ≈ Loss)")
+                
+                # Verificar distribución de predicciones
+                unique_preds = torch.unique(pred_BL).shape[0]
+                unique_gts = torch.unique(gt_BL).shape[0]
+                print(f"  Tokens únicos predichos: {unique_preds}/{V}")
+                print(f"  Tokens únicos en GT: {unique_gts}/{V}\n")
+            
             if prog_si >= 0:    # in progressive training
                 Ltail = acc_tail = -1
             else:               # not in progressive training
