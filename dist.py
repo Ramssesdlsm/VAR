@@ -91,7 +91,8 @@ def new_group(ranks: List[int]):
 
 def barrier():
     if __initialized:
-        tdist.barrier()
+        # Especificar device_ids para evitar warning de NCCL
+        tdist.barrier(device_ids=[__local_rank])
 
 
 def allreduce(t: torch.Tensor, async_op=False):

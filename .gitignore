@@ -26,3 +26,4 @@ local_output*
 # Ignore data folder at all levels
 **/data/
 **/output/
+**/kaggle/
