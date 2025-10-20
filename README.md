@@ -202,6 +202,41 @@ We'll provide the sampling script later.
 | [06/16/2024] | STAR: Scale-wise Text-to-image generation via Auto-Regressive representations                                                 | https://arxiv.org/abs/2406.10797                                   |
 
 
+---
+
+## 🎓 Dataset: ImageNet Localization (No Registration Required)
+
+Para entrenar VAR sin necesidad de solicitar acceso a ImageNet, hemos incluido soporte para **ImageNet Object Localization Challenge**, un subconjunto público de 50,000 imágenes.
+
+### Descarga Rápida
+
+```bash
+# 1. Descargar dataset (6.3 GB, ~15-30 min)
+./scripts/download_imagenet_localization.sh
+
+# 2. Verificar descarga
+python scripts/verify_dataset.py
+
+# 3. Entrenar
+sbatch train_var.slurm
+```
+
+### Características del Dataset
+
+- ✅ **Público**: No requiere registro ni solicitud de acceso
+- 📊 **50,000 imágenes**: 40K train, 10K val
+- 🏷️ **1,000 clases**: Las mismas de ImageNet completo
+- 💾 **6.3 GB**: Tamaño manejable para prototipado
+- 🚀 **Organizado**: Compatible con PyTorch ImageFolder
+
+### Documentación
+
+- **[IMAGENET_QUICKSTART.md](IMAGENET_QUICKSTART.md)**: Comandos rápidos para empezar
+- **[IMAGENET_LOCALIZATION_GUIDE.md](IMAGENET_LOCALIZATION_GUIDE.md)**: Guía completa con detalles
+- **[TRAINING_GUIDE.md](TRAINING_GUIDE.md)**: Guía de entrenamiento del modelo VAR
+
+---
+
 ## License
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
